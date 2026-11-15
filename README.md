@@ -17,8 +17,15 @@ The idea behind it is simple: nobody in the waiting room should have to wonder w
 | Part | Built with |
 |---|---|
 | Frontend | Next.js (App Router), React, TypeScript, Tailwind CSS v4, Recharts |
-| Backend | Node.js, TypeScript, Prisma |
-| Database | Whatever `prisma/schema.prisma` points to |
+| Backend | Node.js, TypeScript |
+| Database | PostgreSQL, accessed through Prisma |
+| Auth | JSON Web Tokens (JWT), passwords stored as hashes |
+
+### How the pieces fit together
+
+- **PostgreSQL** stores everything: manager accounts, queues, and every token issued, along with when it was created, called and finished. The dashboard's numbers are worked out from those timestamps.
+- **Prisma** sits between the backend and the database. The tables are defined once in `backend/prisma/schema.prisma`, and Prisma turns that into SQL migrations (`prisma/migrations/`) and a fully typed client (`src/lib/prisma.ts`). A typo in a field name is a compile error, not a runtime surprise.
+- **JWT** handles sign-in. When a manager registers or signs in, the backend checks their password and returns a signed token. The frontend sends that token with every request, and `backend/src/middleware/auth.ts` verifies it before any protected route runs. The token is signed with `JWT_SECRET`, so it can't be forged without that secret.
 
 ## Project layout
 
@@ -96,31 +103,84 @@ The idea behind it is simple: nobody in the waiting room should have to wonder w
 
 ## Getting started
 
-You need Node.js and the database that `backend/prisma/schema.prisma` uses.
+### What you need
 
-### 1. Backend
+- Node.js 20 or newer
+- PostgreSQL 14 or newer, installed locally or running in Docker
+
+If you have Docker, this starts a database you can use straight away:
+
+```bash
+docker run --name queue-manager-db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=queue_manager \
+  -p 5432:5432 -d postgres:16
+```
+
+If you installed PostgreSQL yourself, create an empty database for the app:
+
+```bash
+createdb queue_manager
+```
+
+### 1. Set up the backend
 
 ```bash
 cd backend
 npm install
-cp .env.example .env      # then fill in the values
-npx prisma migrate dev    # creates the database tables
-npx prisma db seed        # adds demo data
+cp .env.example .env
+```
+
+Open `backend/.env` and fill it in:
+
+```env
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/queue_manager"
+JWT_SECRET="replace-with-a-long-random-string"
+PORT=3001
+```
+
+| Variable | What it's for |
+|---|---|
+| `DATABASE_URL` | Where Prisma connects. The format is `postgresql://USER:PASSWORD@HOST:PORT/DATABASE`. |
+| `JWT_SECRET` | The key used to sign and verify login tokens. Use a long random value and never commit it. `openssl rand -base64 32` generates a good one. |
+| `PORT` | The port the API listens on. |
+
+Then create the tables, load the demo data and start the server:
+
+```bash
+npx prisma migrate dev    # applies the migrations and generates the Prisma client
+npx prisma db seed        # adds demo queues and the demo manager account
 npm run dev
 ```
 
-### 2. Frontend
+### 2. Set up the frontend
 
 In a second terminal:
 
 ```bash
 cd frontend
 npm install
-cp .env.example .env      # point it at the backend's URL
+cp .env.example .env
+```
+
+Open `frontend/.env` and point it at the backend:
+
+```env
+NEXT_PUBLIC_API_URL="http://localhost:3001"
+```
+
+| Variable | What it's for |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | The address of the backend. It must match the backend's `PORT`. |
+
+Then start it:
+
+```bash
 npm run dev
 ```
 
-Then open http://localhost:3000.
+Open http://localhost:3000 and sign in.
 
 ### Demo account
 
@@ -131,9 +191,20 @@ After seeding, sign in with:
 
 The login page also has a "Fill in the demo account" link.
 
-## Environment variables
+### Handy Prisma commands
 
-Both `backend/.env.example` and `frontend/.env.example` list the variables each side needs. Copy each one to `.env` and fill it in. The backend needs at least the database connection, and the frontend needs the backend's address.
+| Command | What it does |
+|---|---|
+| `npx prisma studio` | Opens a browser view of the database, useful for checking data |
+| `npx prisma migrate dev --name <change>` | Creates a new migration after you edit `schema.prisma` |
+| `npx prisma migrate reset` | Wipes the database, re-runs every migration and re-seeds it |
+| `npx prisma generate` | Regenerates the typed client without touching the database |
+
+### If something goes wrong
+
+- **`Can't reach database server`**: PostgreSQL isn't running, or `DATABASE_URL` has the wrong host, port, user or password.
+- **The frontend loads but every request fails**: check that the backend is running and that `NEXT_PUBLIC_API_URL` matches its port.
+- **Signed out after restarting the backend**: `JWT_SECRET` changed, so old tokens no longer verify. Sign in again.
 
 ## API
 
